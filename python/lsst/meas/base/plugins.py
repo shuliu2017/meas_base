@@ -80,6 +80,8 @@ __all__ = (
     "ForcedTransformedShapeConfig", "ForcedTransformedShapePlugin",
     "EvaluateLocalPhotoCalibPlugin", "EvaluateLocalPhotoCalibPluginConfig",
     "EvaluateLocalWcsPlugin", "EvaluateLocalWcsPluginConfig",
+    "PolarityConfig",
+    "PolarityPlugin"
 )
 
 
@@ -124,6 +126,78 @@ wrapTransform(ApertureFluxTransform)
 wrapTransform(LocalBackgroundTransform)
 
 log = logging.getLogger(__name__)
+
+
+class PolarityConfig(BaseMeasurementPluginConfig):
+    """Configuration for the polarity measurement algorithm.
+    """
+    pass
+
+
+class PolarityPlugin(GenericPlugin):
+    """ Compute the polarity of a detection.
+
+    Count the number of positive pixels (positiveCount)
+    and negative pixels (negativeCount).
+    The polarity is defined as
+    polarity = min(positiveCount, negativeCount) / max(positiveCount, negativeCount)
+
+    Parameters
+    ----------
+    config : `PolarityConfig`
+        Plugin configuraion.
+    name : `str`
+        Plugin name.
+    schema : `lsst.afw.table.Schema`
+        The schema for the measurement output catalog. New fields will be
+        added to hold measurements produced by this plugin.
+    metadata : `lsst.daf.base.PropertySet`
+        Plugin metadata that will be attached to the output catalog
+    """
+
+    ConfigClass = PolarityConfig
+    POLARITY_THRESHOLD = 0.1
+    """Detection is regarded as having poor polarity
+       if the polarity surpasses this threshold.
+    """
+
+    @classmethod
+    def getExecutionOrder(cls):
+        return BasePlugin.FLUX_ORDER
+
+    def __init__(self, config, name, schema, metadata):
+        GenericPlugin.__init__(self, config, name, schema, metadata)
+        self.positiveCount = schema.addField(
+            name + '_positive_count',
+            type=np.float64,
+            doc='Count of positive pixels'
+        )
+        self.negativeCount = schema.addField(
+            name + '_negative_count',
+            type=np.float64,
+            doc='Count of negative pixels'
+        )
+        self.polarityFlag = schema.addField(
+            name + '_flag_polarity',
+            type="Flag",
+            doc="Set to True when the detection is not dominated by one single polarity"
+        )
+
+    def measure(self, measRecord, exposure, center):
+        foot = measRecord.getFootprint()
+        image = exposure.getImage()
+        pixels = lsst.afw.detection.makeHeavyFootprint(foot, image)
+        image_array = pixels.getImageArray()
+        positiveCount = np.sum(image_array > 0)
+        negativeCount = np.sum(image_array < 0)
+        polarity = min(positiveCount, negativeCount) / max(positiveCount, negativeCount)
+
+        measRecord.set(self.positiveCount, positiveCount)
+        measRecord.set(self.negativeCount, negativeCount)
+        if polarity > self.POLARITY_THRESHOLD:
+            measRecord.set(self.polarityFlag, True)
+        else:
+            measRecord.set(self.polarityFlag, False)
 
 
 class SingleFrameFPPositionConfig(SingleFramePluginConfig):
